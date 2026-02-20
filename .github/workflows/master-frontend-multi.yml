@@ -226,9 +226,9 @@ jobs:
           allowUpdates: true
           token: ${{ secrets.GITHUB_TOKEN }}
           
-    sysSA-notify-UAT:
+  sysSA-notify-uat:
     name: "[SHELF-AWARENESS | UAT] Notify"
-    if: ${{ always() && github.ref == 'refs/heads/test' && github.event_name == 'push' }}
+    if: ${{ always() && github.ref == 'refs/heads/uat' && github.event_name == 'push' }}
     needs: [sysSA-release-uat, sysSA-deploy-uat]
     uses: ./.github/workflows/notify.yml
     with:
@@ -239,8 +239,6 @@ jobs:
       tribe: ${{ vars.TRIBE_NAME }}
       system: shelf-awareness
     secrets: inherit
-
-    
 
   # ── SHELF-AWARENESS – PRODUCTION ──────────────────────────────────
   sysSA-build-prod:
@@ -349,16 +347,16 @@ jobs:
           allowUpdates: true
           token: ${{ secrets.GITHUB_TOKEN }}
           
-    sysSA-notify-prod:
+  sysSA-notify-prod:
     name: "[SHELF-AWARENESS | PROD] Notify"
-    if: ${{ always() && github.ref == 'refs/heads/test' && github.event_name == 'push' }}
+    if: ${{ always() && github.ref == 'refs/heads/main' && github.event_name == 'push' }}
     needs: [sysSA-deploy-prod]
     uses: ./.github/workflows/notify.yml
     with:
-      status: ${{ needs.sysSA-deploy-test.result }}
+      status: ${{ needs.sysSA-deploy-prod.result }}
       pipeline: "${{ vars.TRIBE_NAME }}/shelf-awareness Frontend – Production"
       version: ${{ needs.sysSA-deploy-prod.outputs.version }}
-      environment: prodiction
+      environment: production
       tribe: ${{ vars.TRIBE_NAME }}
       system: shelf-awareness
     secrets: inherit
@@ -560,7 +558,7 @@ jobs:
 
   sysCP-notify-uat:
     name: "[CENTRAL-PERK | UAT] Notify"
-    if: ${{ always() && github.ref == 'refs/heads/test' && github.event_name == 'push' }}
+    if: ${{ always() && github.ref == 'refs/heads/uat' && github.event_name == 'push' }}
     needs: [sysCP-release-uat, sysCP-deploy-uat]
     uses: ./.github/workflows/notify.yml
     with:
@@ -681,7 +679,7 @@ jobs:
 
   sysCP-notify-prod:
     name: "[CENTRAL-PERK | PROD] Notify"
-    if: ${{ always() && github.ref == 'refs/heads/test' && github.event_name == 'push' }}
+    if: ${{ always() && github.ref == 'refs/heads/main' && github.event_name == 'push' }}
     needs: [sysCP-deploy-prod]
     uses: ./.github/workflows/notify.yml
     with:
