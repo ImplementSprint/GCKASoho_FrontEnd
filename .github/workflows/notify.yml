@@ -57,6 +57,12 @@ jobs:
   notify:
     name: Send Notifications
     runs-on: ubuntu-latest
+    # 1. Map your secrets to environment variables here
+    env:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      NOTIFY_EMAIL_TO: ${{ secrets.NOTIFY_EMAIL_TO }}
+      SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
     steps:
       - name: Set notification metadata
         id: meta
@@ -91,7 +97,8 @@ jobs:
 
       # ── Discord Notification ──────────────────────────────────────
       - name: Notify Discord
-        if: ${{ secrets.DISCORD_WEBHOOK_URL != '' }}
+        # 2. Check the env context instead of secrets, and drop the ${{ }}
+        if: env.DISCORD_WEBHOOK_URL != ''
         run: |
           PAYLOAD=$(cat <<EOF
           {
@@ -101,8 +108,8 @@ jobs:
               "color": ${{ steps.meta.outputs.color }},
               "fields": [
                 { "name": "Context",      "value": "${{ steps.meta.outputs.context }}", "inline": true },
-                { "name": "Environment",  "value": "${{ inputs.environment }}",          "inline": true },
-                { "name": "Version",      "value": "${{ inputs.version }}",              "inline": true },
+                { "name": "Environment",  "value": "${{ inputs.environment }}",         "inline": true },
+                { "name": "Version",      "value": "${{ inputs.version }}",             "inline": true },
                 { "name": "Triggered by", "value": "${{ github.actor }}",               "inline": true },
                 { "name": "Branch",       "value": "${{ github.ref_name }}",            "inline": true },
                 { "name": "Run",          "value": "[#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})", "inline": true }
@@ -119,7 +126,8 @@ jobs:
 
       # ── Slack Notification ────────────────────────────────────────
       - name: Notify Slack
-        if: ${{ secrets.SLACK_WEBHOOK_URL != '' }}
+        # 3. Check the env context
+        if: env.SLACK_WEBHOOK_URL != ''
         run: |
           PAYLOAD=$(cat <<EOF
           {
@@ -160,7 +168,8 @@ jobs:
 
       # ── Email Notification ────────────────────────────────────────
       - name: Notify via Email
-        if: ${{ secrets.NOTIFY_EMAIL_TO != '' && secrets.SMTP_SERVER != '' }}
+        # 4. Check the env context
+        if: env.NOTIFY_EMAIL_TO != '' && env.SMTP_SERVER != ''
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: ${{ secrets.SMTP_SERVER }}
