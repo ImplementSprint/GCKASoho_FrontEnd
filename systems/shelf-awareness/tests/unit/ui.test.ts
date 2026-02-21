@@ -7,7 +7,7 @@ describe('UI Component Tests', () => {
   })
 
   it('should return correct page title', () => {
-    const title = 'Shelf Awareness'
+    const title = 'Central Perk'
     expect(title).toBeDefined()
     expect(typeof title).toBe('string')
   })

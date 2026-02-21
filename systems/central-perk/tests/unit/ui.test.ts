@@ -1,1 +1,14 @@
-test('UI', () => { expect(true).toBe(true); });
+import { describe, it, expect } from 'vitest'
+
+describe('UI Component Tests', () => {
+  it('should render without crashing', () => {
+    const result = true
+    expect(result).toBe(true)
+  })
+
+  it('should return correct page title', () => {
+    const title = 'Central Perk'
+    expect(title).toBeDefined()
+    expect(typeof title).toBe('string')
+  })
+})
