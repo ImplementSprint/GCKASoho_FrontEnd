@@ -1,16 +1,16 @@
 ########################################################################
-# MASTER FRONTEND PIPELINE — MULTI-SYSTEM
-# Stack: Next.js (React) — Test on Replit → UAT/Prod on Vercel
-# Flow:  test → uat → pre-production → backup → governance → production
+# MASTER FRONTEND PIPELINE - MULTI-SYSTEM
+# Stack: Next.js (React) - Test on Replit -> UAT/Prod on Vercel
+# Flow:  test -> uat -> pre-production -> backup -> governance -> production
 #
 # DIRECTORY STRUCTURE:
 #   systems/
-#     shelf-awareness/   ← e.g. main portal
+#     shelf-awareness/   <- e.g. main portal
 #       src/  app/  package.json  next.config.js
-#     central-perk/      ← e.g. admin portal
+#     central-perk/      <- e.g. admin portal
 #       src/  app/  package.json  next.config.js
 #   .github/workflows/
-#     master-frontend-multi.yml   ← this file
+#     master-frontend-multi.yml   <- this file
 #     notify.yml
 #
 # TO ADD MORE SYSTEMS: duplicate the entire Central-Perk block and replace
@@ -74,7 +74,7 @@ jobs:
           projectBaseDir: systems/shelf-awareness
           args: >
             -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY_SHELFAWARENESS }}
-            -Dsonar.organization=${{ secrets.SONAR_ORG }}
+            -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
             -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
 
   sysSA-quality-gate:
@@ -404,7 +404,7 @@ jobs:
           projectBaseDir: systems/central-perk
           args: >
             -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY_CENTRALPERK }}
-            -Dsonar.organization=${{ secrets.SONAR_ORG }}
+            -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
             -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
 
   sysCP-quality-gate:
