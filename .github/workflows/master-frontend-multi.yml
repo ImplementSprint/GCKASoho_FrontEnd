@@ -1,16 +1,16 @@
 ########################################################################
-# MASTER FRONTEND PIPELINE — MULTI-SYSTEM
-# Stack: Next.js (React) — Test on Replit → UAT/Prod on Vercel
-# Flow:  test → uat → pre-production → backup → governance → production
+# MASTER FRONTEND PIPELINE - MULTI-SYSTEM
+# Stack: Next.js (React) - Test on Replit -> UAT/Prod on Vercel
+# Flow:  test -> uat -> pre-production -> backup -> governance -> production
 #
 # DIRECTORY STRUCTURE:
 #   systems/
-#     shelf-awareness/   ← e.g. main portal
+#     shelf-awareness/   <- e.g. main portal
 #       src/  app/  package.json  next.config.js
-#     central-perk/      ← e.g. admin portal
+#     central-perk/      <- e.g. admin portal
 #       src/  app/  package.json  next.config.js
 #   .github/workflows/
-#     master-frontend-multi.yml   ← this file
+#     master-frontend-multi.yml   <- this file
 #     notify.yml
 #
 # TO ADD MORE SYSTEMS: duplicate the entire Central-Perk block and replace
@@ -24,6 +24,7 @@ on:
     branches: [test, uat, main]
   pull_request:
     branches: [test, uat, main]
+  workflow_dispatch:
 
 env:
   TRIBE_NAME: ${{ vars.TRIBE_NAME }}
@@ -40,7 +41,7 @@ jobs:
   # ── SHELF-AWARENESS – TEST ────────────────────────────────────────
   sysSA-test:
     name: "[SHELF-AWARENESS | TEST] Jest/Vitest Tests"
-    if: github.ref == 'refs/heads/test' || (github.event_name == 'pull_request' && github.base_ref == 'test')
+    if: github.ref == 'refs/heads/test' || (github.event_name == 'pull_request' && github.base_ref == 'test') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -59,7 +60,7 @@ jobs:
 
   sysSA-sonar:
     name: "[SHELF-AWARENESS | TEST] SonarCloud"
-    if: github.ref == 'refs/heads/test'
+    if: github.ref == 'refs/heads/test' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     needs: sysSA-test
     steps:
@@ -72,26 +73,26 @@ jobs:
         with:
           projectBaseDir: systems/shelf-awareness
           args: >
-            -Dsonar.projectKey=${{ vars.SONAR_PROJECT_KEY_SYSSA }}
-            -Dsonar.organization=${{ vars.SONAR_ORG }}
+            -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY_SHELFAWARENESS }}
+            -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
             -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
 
   sysSA-quality-gate:
     name: "[SHELF-AWARENESS | TEST] Quality Gate"
-    if: github.ref == 'refs/heads/test' && github.event_name == 'push'
+    if: (github.ref == 'refs/heads/test' && github.event_name == 'push') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     needs: sysSA-sonar
-    environment: test-quality-gate-sysSA
+    environment: test-quality-gate-ShelfAwareness
     steps:
       - run: echo "✅ Shelf-Awareness quality gate approved"
 
   sysSA-deploy-test:
     name: "[SHELF-AWARENESS | TEST] Deploy to Replit"
-    if: github.ref == 'refs/heads/test' && github.event_name == 'push'
+    if: (github.ref == 'refs/heads/test' && github.event_name == 'push') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     needs: sysSA-quality-gate
     environment:
-      name: test-sysSA
+      name: test-ShelfAwareness
       url: ${{ vars.REPLIT_APP_URL_TEST_SYSSA }}
     outputs:
       version: ${{ steps.version.outputs.VERSION }}
@@ -121,12 +122,12 @@ jobs:
 
   sysSA-notify-test:
     name: "[SHELF-AWARENESS | TEST] Notify"
-    if: ${{ always() && github.ref == 'refs/heads/test' && github.event_name == 'push' }}
+    if: always() && ((github.ref == 'refs/heads/test' && github.event_name == 'push') || github.event_name == 'workflow_dispatch')
     needs: [sysSA-deploy-test]
     uses: ./.github/workflows/notify.yml
     with:
       status: ${{ needs.sysSA-deploy-test.result }}
-      pipeline: "${{ vars.TRIBE_NAME }}/shelf-awareness Frontend – Test"
+      pipeline: "shelf-awareness Frontend – Test"
       version: ${{ needs.sysSA-deploy-test.outputs.version }}
       environment: test
       tribe: ${{ vars.TRIBE_NAME }}
@@ -159,7 +160,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: sysSA-build-uat
     environment:
-      name: uat-sysSA
+      name: uat-ShelfAwareness
       url: ${{ steps.deploy.outputs.url }}
     outputs:
       version: ${{ steps.version.outputs.VERSION }}
@@ -204,7 +205,7 @@ jobs:
     if: github.ref == 'refs/heads/uat' && github.event_name == 'push'
     runs-on: ubuntu-latest
     needs: sysSA-e2e-uat
-    environment: uat-qa-gate-sysSA
+    environment: uat-qa-gate-ShelfAwareness
     steps:
       - run: echo "✅ Shelf-Awareness UAT approved"
 
@@ -225,15 +226,15 @@ jobs:
           prerelease: true
           allowUpdates: true
           token: ${{ secrets.GITHUB_TOKEN }}
-          
+
   sysSA-notify-uat:
     name: "[SHELF-AWARENESS | UAT] Notify"
-    if: ${{ always() && github.ref == 'refs/heads/uat' && github.event_name == 'push' }}
+    if: always() && github.ref == 'refs/heads/uat' && github.event_name == 'push'
     needs: [sysSA-release-uat, sysSA-deploy-uat]
     uses: ./.github/workflows/notify.yml
     with:
       status: ${{ needs.sysSA-release-uat.result }}
-      pipeline: "${{ vars.TRIBE_NAME }}/shelf-awareness Frontend – UAT"
+      pipeline: "shelf-awareness Frontend – UAT"
       version: ${{ needs.sysSA-deploy-uat.outputs.version }}
       environment: uat
       tribe: ${{ vars.TRIBE_NAME }}
@@ -266,7 +267,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: sysSA-build-prod
     environment:
-      name: pre-production-sysSA
+      name: pre-production-ShelfAwareness
       url: ${{ steps.deploy.outputs.url }}
     outputs:
       version: ${{ steps.version.outputs.VERSION }}
@@ -324,7 +325,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: sysSA-governance
     environment:
-      name: production-sysSA
+      name: production-ShelfAwareness
       url: https://${{ vars.PROD_DOMAIN_SYSSA }}
     outputs:
       version: ${{ steps.version.outputs.VERSION }}
@@ -346,15 +347,15 @@ jobs:
           makeLatest: false
           allowUpdates: true
           token: ${{ secrets.GITHUB_TOKEN }}
-          
+
   sysSA-notify-prod:
     name: "[SHELF-AWARENESS | PROD] Notify"
-    if: ${{ always() && github.ref == 'refs/heads/main' && github.event_name == 'push' }}
+    if: always() && github.ref == 'refs/heads/main' && github.event_name == 'push'
     needs: [sysSA-deploy-prod]
     uses: ./.github/workflows/notify.yml
     with:
       status: ${{ needs.sysSA-deploy-prod.result }}
-      pipeline: "${{ vars.TRIBE_NAME }}/shelf-awareness Frontend – Production"
+      pipeline: "shelf-awareness Frontend – Production"
       version: ${{ needs.sysSA-deploy-prod.outputs.version }}
       environment: production
       tribe: ${{ vars.TRIBE_NAME }}
@@ -370,7 +371,7 @@ jobs:
   # ── CENTRAL-PERK – TEST ───────────────────────────────────────────
   sysCP-test:
     name: "[CENTRAL-PERK | TEST] Jest/Vitest Tests"
-    if: github.ref == 'refs/heads/test' || (github.event_name == 'pull_request' && github.base_ref == 'test')
+    if: github.ref == 'refs/heads/test' || (github.event_name == 'pull_request' && github.base_ref == 'test') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -389,7 +390,7 @@ jobs:
 
   sysCP-sonar:
     name: "[CENTRAL-PERK | TEST] SonarCloud"
-    if: github.ref == 'refs/heads/test'
+    if: github.ref == 'refs/heads/test' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     needs: sysCP-test
     steps:
@@ -402,26 +403,26 @@ jobs:
         with:
           projectBaseDir: systems/central-perk
           args: >
-            -Dsonar.projectKey=${{ vars.SONAR_PROJECT_KEY_SYSCP }}
-            -Dsonar.organization=${{ vars.SONAR_ORG }}
+            -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY_CENTRALPERK }}
+            -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
             -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
 
   sysCP-quality-gate:
     name: "[CENTRAL-PERK | TEST] Quality Gate"
-    if: github.ref == 'refs/heads/test' && github.event_name == 'push'
+    if: (github.ref == 'refs/heads/test' && github.event_name == 'push') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     needs: sysCP-sonar
-    environment: test-quality-gate-sysCP
+    environment: test-quality-gate-CentralPerk
     steps:
       - run: echo "✅ Central-Perk quality gate approved"
 
   sysCP-deploy-test:
     name: "[CENTRAL-PERK | TEST] Deploy to Replit"
-    if: github.ref == 'refs/heads/test' && github.event_name == 'push'
+    if: (github.ref == 'refs/heads/test' && github.event_name == 'push') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     needs: sysCP-quality-gate
     environment:
-      name: test-sysCP
+      name: test-CentralPerk
       url: ${{ vars.REPLIT_APP_URL_TEST_SYSCP }}
     outputs:
       version: ${{ steps.version.outputs.VERSION }}
@@ -451,12 +452,12 @@ jobs:
 
   sysCP-notify-test:
     name: "[CENTRAL-PERK | TEST] Notify"
-    if: ${{ always() && github.ref == 'refs/heads/test' && github.event_name == 'push' }}
+    if: always() && ((github.ref == 'refs/heads/test' && github.event_name == 'push') || github.event_name == 'workflow_dispatch')
     needs: [sysCP-deploy-test]
     uses: ./.github/workflows/notify.yml
     with:
       status: ${{ needs.sysCP-deploy-test.result }}
-      pipeline: "${{ vars.TRIBE_NAME }}/central-perk Frontend – Test"
+      pipeline: "central-perk Frontend – Test"
       version: ${{ needs.sysCP-deploy-test.outputs.version }}
       environment: test
       tribe: ${{ vars.TRIBE_NAME }}
@@ -489,7 +490,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: sysCP-build-uat
     environment:
-      name: uat-sysCP
+      name: uat-CentralPerk
       url: ${{ steps.deploy.outputs.url }}
     outputs:
       version: ${{ steps.version.outputs.VERSION }}
@@ -534,7 +535,7 @@ jobs:
     if: github.ref == 'refs/heads/uat' && github.event_name == 'push'
     runs-on: ubuntu-latest
     needs: sysCP-e2e-uat
-    environment: uat-qa-gate-sysCP
+    environment: uat-qa-gate-CentralPerk
     steps:
       - run: echo "✅ Central-Perk UAT approved"
 
@@ -558,12 +559,12 @@ jobs:
 
   sysCP-notify-uat:
     name: "[CENTRAL-PERK | UAT] Notify"
-    if: ${{ always() && github.ref == 'refs/heads/uat' && github.event_name == 'push' }}
+    if: always() && github.ref == 'refs/heads/uat' && github.event_name == 'push'
     needs: [sysCP-release-uat, sysCP-deploy-uat]
     uses: ./.github/workflows/notify.yml
     with:
       status: ${{ needs.sysCP-release-uat.result }}
-      pipeline: "${{ vars.TRIBE_NAME }}/central-perk Frontend – UAT"
+      pipeline: "central-perk Frontend – UAT"
       version: ${{ needs.sysCP-deploy-uat.outputs.version }}
       environment: uat
       tribe: ${{ vars.TRIBE_NAME }}
@@ -596,7 +597,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: sysCP-build-prod
     environment:
-      name: pre-production-sysCP
+      name: pre-production-CentralPerk
       url: ${{ steps.deploy.outputs.url }}
     outputs:
       version: ${{ steps.version.outputs.VERSION }}
@@ -654,7 +655,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: sysCP-governance
     environment:
-      name: production-sysCP
+      name: production-CentralPerk
       url: https://${{ vars.PROD_DOMAIN_SYSCP }}
     outputs:
       version: ${{ steps.version.outputs.VERSION }}
@@ -679,12 +680,12 @@ jobs:
 
   sysCP-notify-prod:
     name: "[CENTRAL-PERK | PROD] Notify"
-    if: ${{ always() && github.ref == 'refs/heads/main' && github.event_name == 'push' }}
+    if: always() && github.ref == 'refs/heads/main' && github.event_name == 'push'
     needs: [sysCP-deploy-prod]
     uses: ./.github/workflows/notify.yml
     with:
       status: ${{ needs.sysCP-deploy-prod.result }}
-      pipeline: "${{ vars.TRIBE_NAME }}/central-perk Frontend – Production"
+      pipeline: "central-perk Frontend – Production"
       version: ${{ needs.sysCP-deploy-prod.outputs.version }}
       environment: production
       tribe: ${{ vars.TRIBE_NAME }}
