@@ -1,0 +1,693 @@
+########################################################################
+# MASTER FRONTEND PIPELINE — MULTI-SYSTEM
+# Stack: Next.js (React) — Test on Replit → UAT/Prod on Vercel
+# Flow:  test → uat → pre-production → backup → governance → production
+#
+# DIRECTORY STRUCTURE:
+#   systems/
+#     shelf-awareness/   ← e.g. main portal
+#       src/  app/  package.json  next.config.js
+#     central-perk/      ← e.g. admin portal
+#       src/  app/  package.json  next.config.js
+#   .github/workflows/
+#     master-frontend-multi.yml   ← this file
+#     notify.yml
+#
+# TO ADD MORE SYSTEMS: duplicate the entire Central-Perk block and replace
+# all occurrences of "sysCP" / "central-perk" / "SYSCP" with the new name.
+# NOTE: Repository is PUBLIC. Never commit secrets or .env files.
+########################################################################
+name: 🖥️ Frontend Master Pipeline (Multi-System)
+
+on:
+  push:
+    branches: [test, uat, main]
+  pull_request:
+    branches: [test, uat, main]
+  workflow_dispatch:
+
+env:
+  TRIBE_NAME: ${{ vars.TRIBE_NAME }}
+
+concurrency:
+  group: frontend-multi-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+# ════════════════════════════════════════════════════════════════════
+# ██████  SHELF-AWARENESS  ███████████████████████████████████████████
+# ════════════════════════════════════════════════════════════════════
+
+  # ── SHELF-AWARENESS – TEST ────────────────────────────────────────
+  sysSA-test:
+    name: "[SHELF-AWARENESS | TEST] Jest/Vitest Tests"
+    if: github.ref == 'refs/heads/test' || (github.event_name == 'pull_request' && github.base_ref == 'test') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: systems/shelf-awareness
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm, cache-dependency-path: systems/shelf-awareness/package-lock.json }
+      - run: npm ci
+      - run: npm test -- --coverage --passWithNoTests
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sysSA-coverage-${{ github.run_number }}
+          path: systems/shelf-awareness/coverage/
+          retention-days: 30
+
+  sysSA-sonar:
+    name: "[SHELF-AWARENESS | TEST] SonarCloud"
+    if: github.ref == 'refs/heads/test' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    needs: sysSA-test
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: SonarSource/sonarcloud-github-action@master
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          projectBaseDir: systems/shelf-awareness
+          args: >
+            -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY_SHELFAWARENESS }}
+            -Dsonar.organization=${{ secrets.SONAR_ORG }}
+            -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
+
+  sysSA-quality-gate:
+    name: "[SHELF-AWARENESS | TEST] Quality Gate"
+    if: (github.ref == 'refs/heads/test' && github.event_name == 'push') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    needs: sysSA-sonar
+    environment: test-quality-gate-ShelfAwareness
+    steps:
+      - run: echo "✅ Shelf-Awareness quality gate approved"
+
+  sysSA-deploy-test:
+    name: "[SHELF-AWARENESS | TEST] Deploy to Replit"
+    if: (github.ref == 'refs/heads/test' && github.event_name == 'push') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    needs: sysSA-quality-gate
+    environment:
+      name: test-ShelfAwareness
+      url: ${{ vars.REPLIT_APP_URL_TEST_SYSSA }}
+    outputs:
+      version: ${{ steps.version.outputs.VERSION }}
+    defaults:
+      run:
+        working-directory: systems/shelf-awareness
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm, cache-dependency-path: systems/shelf-awareness/package-lock.json }
+      - run: npm ci
+      - id: version
+        run: echo "VERSION=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+      - name: Deploy to Replit (Test)
+        run: |
+          curl -X POST "${{ secrets.REPLIT_DEPLOY_HOOK_TEST_SYSSA }}" \
+            -H "Authorization: Bearer ${{ secrets.REPLIT_API_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{"branch":"test","system":"shelf-awareness","env":"test"}'
+      - uses: ncipollo/release-action@v1
+        with:
+          tag: "${{ env.TRIBE_NAME }}-shelf-awareness-frontend-v${{ steps.version.outputs.VERSION }}-test"
+          name: "[shelf-awareness frontend] Test v${{ steps.version.outputs.VERSION }}"
+          prerelease: true
+          allowUpdates: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  sysSA-notify-test:
+    name: "[SHELF-AWARENESS | TEST] Notify"
+    if: always() && ((github.ref == 'refs/heads/test' && github.event_name == 'push') || github.event_name == 'workflow_dispatch')
+    needs: [sysSA-deploy-test]
+    uses: ./.github/workflows/notify.yml
+    with:
+      status: ${{ needs.sysSA-deploy-test.result }}
+      pipeline: "shelf-awareness Frontend – Test"
+      version: ${{ needs.sysSA-deploy-test.outputs.version }}
+      environment: test
+      tribe: ${{ vars.TRIBE_NAME }}
+      system: shelf-awareness
+    secrets: inherit
+
+  # ── SHELF-AWARENESS – UAT ─────────────────────────────────────────
+  sysSA-build-uat:
+    name: "[SHELF-AWARENESS | UAT] Build (Next.js)"
+    if: github.ref == 'refs/heads/uat' || (github.event_name == 'pull_request' && github.base_ref == 'uat')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: systems/shelf-awareness
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm, cache-dependency-path: systems/shelf-awareness/package-lock.json }
+      - run: npm ci && npm run build
+        env: { NEXT_PUBLIC_APP_ENV: uat }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sysSA-uat-build-${{ github.run_number }}
+          path: systems/shelf-awareness/.next/
+          retention-days: 14
+
+  sysSA-deploy-uat:
+    name: "[SHELF-AWARENESS | UAT] Deploy to Vercel"
+    if: github.ref == 'refs/heads/uat' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    needs: sysSA-build-uat
+    environment:
+      name: uat-ShelfAwareness
+      url: ${{ steps.deploy.outputs.url }}
+    outputs:
+      version: ${{ steps.version.outputs.VERSION }}
+      url: ${{ steps.deploy.outputs.url }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        working-directory: systems/shelf-awareness
+        run: echo "VERSION=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+      - id: deploy
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID_SYSSA_UAT }}
+          vercel-args: '--prod'
+
+  sysSA-e2e-uat:
+    name: "[SHELF-AWARENESS | UAT] Selenium + k6"
+    if: github.ref == 'refs/heads/uat' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    needs: sysSA-deploy-uat
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm ci
+        working-directory: systems/shelf-awareness
+      - run: npm run test:e2e
+        working-directory: systems/shelf-awareness
+        env:
+          APP_URL: ${{ needs.sysSA-deploy-uat.outputs.url }}
+      - name: k6 load test
+        run: |
+          sudo apt-get update && sudo apt-get install -y k6
+          k6 run systems/shelf-awareness/tests/load/load.js
+        env:
+          K6_BASE_URL: ${{ needs.sysSA-deploy-uat.outputs.url }}
+
+  sysSA-qa-gate-uat:
+    name: "[SHELF-AWARENESS | UAT] QA Approval"
+    if: github.ref == 'refs/heads/uat' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    needs: sysSA-e2e-uat
+    environment: uat-qa-gate-ShelfAwareness
+    steps:
+      - run: echo "✅ Shelf-Awareness UAT approved"
+
+  sysSA-release-uat:
+    name: "[SHELF-AWARENESS | UAT] GitHub Pre-Release"
+    if: github.ref == 'refs/heads/uat' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    needs: sysSA-qa-gate-uat
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        working-directory: systems/shelf-awareness
+        run: echo "VERSION=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+      - uses: ncipollo/release-action@v1
+        with:
+          tag: "${{ env.TRIBE_NAME }}-shelf-awareness-frontend-v${{ steps.version.outputs.VERSION }}-uat"
+          name: "[shelf-awareness frontend] UAT v${{ steps.version.outputs.VERSION }}"
+          prerelease: true
+          allowUpdates: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  sysSA-notify-uat:
+    name: "[SHELF-AWARENESS | UAT] Notify"
+    if: always() && github.ref == 'refs/heads/uat' && github.event_name == 'push'
+    needs: [sysSA-release-uat, sysSA-deploy-uat]
+    uses: ./.github/workflows/notify.yml
+    with:
+      status: ${{ needs.sysSA-release-uat.result }}
+      pipeline: "shelf-awareness Frontend – UAT"
+      version: ${{ needs.sysSA-deploy-uat.outputs.version }}
+      environment: uat
+      tribe: ${{ vars.TRIBE_NAME }}
+      system: shelf-awareness
+    secrets: inherit
+
+  # ── SHELF-AWARENESS – PRODUCTION ──────────────────────────────────
+  sysSA-build-prod:
+    name: "[SHELF-AWARENESS | PROD] Build (Next.js)"
+    if: github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && github.base_ref == 'main')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: systems/shelf-awareness
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm, cache-dependency-path: systems/shelf-awareness/package-lock.json }
+      - run: npm ci && npm run build
+        env: { NEXT_PUBLIC_APP_ENV: production }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sysSA-prod-build-${{ github.run_number }}
+          path: systems/shelf-awareness/.next/
+          retention-days: 90
+
+  sysSA-deploy-preprod:
+    name: "[SHELF-AWARENESS | PROD] Deploy to Pre-Production (Vercel)"
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    needs: sysSA-build-prod
+    environment:
+      name: pre-production-ShelfAwareness
+      url: ${{ steps.deploy.outputs.url }}
+    outputs:
+      version: ${{ steps.version.outputs.VERSION }}
+      url: ${{ steps.deploy.outputs.url }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        working-directory: systems/shelf-awareness
+        run: echo "VERSION=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+      - id: deploy
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID_SYSSA_PROD }}
+          vercel-args: '--prod'
+
+  sysSA-backup-preprod:
+    name: "[SHELF-AWARENESS | PROD] Backup Deployment Manifest"
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    needs: sysSA-deploy-preprod
+    steps:
+      - name: Commit manifest to backup repository
+        run: |
+          git config --global user.name  "CI/CD Bot"
+          git config --global user.email "cicd-bot@org.local"
+          git clone https://x-access-token:${{ secrets.BACKUP_REPO_PAT }}@github.com/${{ vars.BACKUP_REPO }} /tmp/backup-repo
+          mkdir -p /tmp/backup-repo/${{ env.TRIBE_NAME }}/shelf-awareness/frontend
+          cat > /tmp/backup-repo/${{ env.TRIBE_NAME }}/shelf-awareness/frontend/pre-prod-${{ needs.sysSA-deploy-preprod.outputs.version }}.json << EOF
+          {
+            "tribe": "${{ env.TRIBE_NAME }}", "system": "shelf-awareness", "repo_type": "frontend",
+            "version": "${{ needs.sysSA-deploy-preprod.outputs.version }}",
+            "environment": "pre-production",
+            "vercel_url": "${{ needs.sysSA-deploy-preprod.outputs.url }}",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+            "deployed_by": "${{ github.actor }}"
+          }
+          EOF
+          cd /tmp/backup-repo && git add . && git commit -m "backup: ${{ env.TRIBE_NAME }}/shelf-awareness frontend pre-prod v${{ needs.sysSA-deploy-preprod.outputs.version }}" && git push
+
+  sysSA-governance:
+    name: "[SHELF-AWARENESS | PROD] Governance"
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    needs: sysSA-backup-preprod
+    environment: governance
+    steps:
+      - run: echo "✅ Shelf-Awareness governance approved"
+
+  sysSA-deploy-prod:
+    name: "[SHELF-AWARENESS | PROD] Deploy to Production (Vercel)"
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    needs: sysSA-governance
+    environment:
+      name: production-ShelfAwareness
+      url: https://${{ vars.PROD_DOMAIN_SYSSA }}
+    outputs:
+      version: ${{ steps.version.outputs.VERSION }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        working-directory: systems/shelf-awareness
+        run: echo "VERSION=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+      - uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID_SYSSA_PROD }}
+          vercel-args: '--prod'
+      - uses: ncipollo/release-action@v1
+        with:
+          tag: "${{ env.TRIBE_NAME }}-shelf-awareness-frontend-v${{ steps.version.outputs.VERSION }}"
+          name: "[shelf-awareness frontend] Release v${{ steps.version.outputs.VERSION }}"
+          makeLatest: false
+          allowUpdates: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  sysSA-notify-prod:
+    name: "[SHELF-AWARENESS | PROD] Notify"
+    if: always() && github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [sysSA-deploy-prod]
+    uses: ./.github/workflows/notify.yml
+    with:
+      status: ${{ needs.sysSA-deploy-prod.result }}
+      pipeline: "shelf-awareness Frontend – Production"
+      version: ${{ needs.sysSA-deploy-prod.outputs.version }}
+      environment: production
+      tribe: ${{ vars.TRIBE_NAME }}
+      system: shelf-awareness
+    secrets: inherit
+
+# ════════════════════════════════════════════════════════════════════
+# ██████  CENTRAL-PERK  ██████████████████████████████████████████████
+# To add more systems: duplicate this entire block and replace:
+#   "sysCP" → new prefix   "central-perk" → new name   "SYSCP" → new var suffix
+# ════════════════════════════════════════════════════════════════════
+
+  # ── CENTRAL-PERK – TEST ───────────────────────────────────────────
+  sysCP-test:
+    name: "[CENTRAL-PERK | TEST] Jest/Vitest Tests"
+    if: github.ref == 'refs/heads/test' || (github.event_name == 'pull_request' && github.base_ref == 'test') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: systems/central-perk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm, cache-dependency-path: systems/central-perk/package-lock.json }
+      - run: npm ci
+      - run: npm test -- --coverage --passWithNoTests
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sysCP-coverage-${{ github.run_number }}
+          path: systems/central-perk/coverage/
+          retention-days: 30
+
+  sysCP-sonar:
+    name: "[CENTRAL-PERK | TEST] SonarCloud"
+    if: github.ref == 'refs/heads/test' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    needs: sysCP-test
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: SonarSource/sonarcloud-github-action@master
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          projectBaseDir: systems/central-perk
+          args: >
+            -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY_CENTRALPERK }}
+            -Dsonar.organization=${{ secrets.SONAR_ORG }}
+            -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
+
+  sysCP-quality-gate:
+    name: "[CENTRAL-PERK | TEST] Quality Gate"
+    if: (github.ref == 'refs/heads/test' && github.event_name == 'push') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    needs: sysCP-sonar
+    environment: test-quality-gate-CentralPerk
+    steps:
+      - run: echo "✅ Central-Perk quality gate approved"
+
+  sysCP-deploy-test:
+    name: "[CENTRAL-PERK | TEST] Deploy to Replit"
+    if: (github.ref == 'refs/heads/test' && github.event_name == 'push') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    needs: sysCP-quality-gate
+    environment:
+      name: test-CentralPerk
+      url: ${{ vars.REPLIT_APP_URL_TEST_SYSCP }}
+    outputs:
+      version: ${{ steps.version.outputs.VERSION }}
+    defaults:
+      run:
+        working-directory: systems/central-perk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm, cache-dependency-path: systems/central-perk/package-lock.json }
+      - run: npm ci
+      - id: version
+        run: echo "VERSION=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+      - name: Deploy to Replit (Test)
+        run: |
+          curl -X POST "${{ secrets.REPLIT_DEPLOY_HOOK_TEST_SYSCP }}" \
+            -H "Authorization: Bearer ${{ secrets.REPLIT_API_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{"branch":"test","system":"central-perk","env":"test"}'
+      - uses: ncipollo/release-action@v1
+        with:
+          tag: "${{ env.TRIBE_NAME }}-central-perk-frontend-v${{ steps.version.outputs.VERSION }}-test"
+          name: "[central-perk frontend] Test v${{ steps.version.outputs.VERSION }}"
+          prerelease: true
+          allowUpdates: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  sysCP-notify-test:
+    name: "[CENTRAL-PERK | TEST] Notify"
+    if: always() && ((github.ref == 'refs/heads/test' && github.event_name == 'push') || github.event_name == 'workflow_dispatch')
+    needs: [sysCP-deploy-test]
+    uses: ./.github/workflows/notify.yml
+    with:
+      status: ${{ needs.sysCP-deploy-test.result }}
+      pipeline: "central-perk Frontend – Test"
+      version: ${{ needs.sysCP-deploy-test.outputs.version }}
+      environment: test
+      tribe: ${{ vars.TRIBE_NAME }}
+      system: central-perk
+    secrets: inherit
+
+  # ── CENTRAL-PERK – UAT ────────────────────────────────────────────
+  sysCP-build-uat:
+    name: "[CENTRAL-PERK | UAT] Build (Next.js)"
+    if: github.ref == 'refs/heads/uat' || (github.event_name == 'pull_request' && github.base_ref == 'uat')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: systems/central-perk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm, cache-dependency-path: systems/central-perk/package-lock.json }
+      - run: npm ci && npm run build
+        env: { NEXT_PUBLIC_APP_ENV: uat }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sysCP-uat-build-${{ github.run_number }}
+          path: systems/central-perk/.next/
+          retention-days: 14
+
+  sysCP-deploy-uat:
+    name: "[CENTRAL-PERK | UAT] Deploy to Vercel"
+    if: github.ref == 'refs/heads/uat' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    needs: sysCP-build-uat
+    environment:
+      name: uat-CentralPerk
+      url: ${{ steps.deploy.outputs.url }}
+    outputs:
+      version: ${{ steps.version.outputs.VERSION }}
+      url: ${{ steps.deploy.outputs.url }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        working-directory: systems/central-perk
+        run: echo "VERSION=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+      - id: deploy
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID_SYSCP_UAT }}
+          vercel-args: '--prod'
+
+  sysCP-e2e-uat:
+    name: "[CENTRAL-PERK | UAT] Selenium + k6"
+    if: github.ref == 'refs/heads/uat' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    needs: sysCP-deploy-uat
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm ci
+        working-directory: systems/central-perk
+      - run: npm run test:e2e
+        working-directory: systems/central-perk
+        env:
+          APP_URL: ${{ needs.sysCP-deploy-uat.outputs.url }}
+      - name: k6 load test
+        run: |
+          sudo apt-get update && sudo apt-get install -y k6
+          k6 run systems/central-perk/tests/load/load.js
+        env:
+          K6_BASE_URL: ${{ needs.sysCP-deploy-uat.outputs.url }}
+
+  sysCP-qa-gate-uat:
+    name: "[CENTRAL-PERK | UAT] QA Approval"
+    if: github.ref == 'refs/heads/uat' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    needs: sysCP-e2e-uat
+    environment: uat-qa-gate-CentralPerk
+    steps:
+      - run: echo "✅ Central-Perk UAT approved"
+
+  sysCP-release-uat:
+    name: "[CENTRAL-PERK | UAT] GitHub Pre-Release"
+    if: github.ref == 'refs/heads/uat' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    needs: sysCP-qa-gate-uat
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        working-directory: systems/central-perk
+        run: echo "VERSION=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+      - uses: ncipollo/release-action@v1
+        with:
+          tag: "${{ env.TRIBE_NAME }}-central-perk-frontend-v${{ steps.version.outputs.VERSION }}-uat"
+          name: "[central-perk frontend] UAT v${{ steps.version.outputs.VERSION }}"
+          prerelease: true
+          allowUpdates: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  sysCP-notify-uat:
+    name: "[CENTRAL-PERK | UAT] Notify"
+    if: always() && github.ref == 'refs/heads/uat' && github.event_name == 'push'
+    needs: [sysCP-release-uat, sysCP-deploy-uat]
+    uses: ./.github/workflows/notify.yml
+    with:
+      status: ${{ needs.sysCP-release-uat.result }}
+      pipeline: "central-perk Frontend – UAT"
+      version: ${{ needs.sysCP-deploy-uat.outputs.version }}
+      environment: uat
+      tribe: ${{ vars.TRIBE_NAME }}
+      system: central-perk
+    secrets: inherit
+
+  # ── CENTRAL-PERK – PRODUCTION ─────────────────────────────────────
+  sysCP-build-prod:
+    name: "[CENTRAL-PERK | PROD] Build (Next.js)"
+    if: github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && github.base_ref == 'main')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: systems/central-perk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm, cache-dependency-path: systems/central-perk/package-lock.json }
+      - run: npm ci && npm run build
+        env: { NEXT_PUBLIC_APP_ENV: production }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sysCP-prod-build-${{ github.run_number }}
+          path: systems/central-perk/.next/
+          retention-days: 90
+
+  sysCP-deploy-preprod:
+    name: "[CENTRAL-PERK | PROD] Deploy to Pre-Production (Vercel)"
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    needs: sysCP-build-prod
+    environment:
+      name: pre-production-CentralPerk
+      url: ${{ steps.deploy.outputs.url }}
+    outputs:
+      version: ${{ steps.version.outputs.VERSION }}
+      url: ${{ steps.deploy.outputs.url }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        working-directory: systems/central-perk
+        run: echo "VERSION=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+      - id: deploy
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID_SYSCP_PROD }}
+          vercel-args: '--prod'
+
+  sysCP-backup-preprod:
+    name: "[CENTRAL-PERK | PROD] Backup Deployment Manifest"
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    needs: sysCP-deploy-preprod
+    steps:
+      - name: Commit manifest to backup repository
+        run: |
+          git config --global user.name  "CI/CD Bot"
+          git config --global user.email "cicd-bot@org.local"
+          git clone https://x-access-token:${{ secrets.BACKUP_REPO_PAT }}@github.com/${{ vars.BACKUP_REPO }} /tmp/backup-repo
+          mkdir -p /tmp/backup-repo/${{ env.TRIBE_NAME }}/central-perk/frontend
+          cat > /tmp/backup-repo/${{ env.TRIBE_NAME }}/central-perk/frontend/pre-prod-${{ needs.sysCP-deploy-preprod.outputs.version }}.json << EOF
+          {
+            "tribe": "${{ env.TRIBE_NAME }}", "system": "central-perk", "repo_type": "frontend",
+            "version": "${{ needs.sysCP-deploy-preprod.outputs.version }}",
+            "environment": "pre-production",
+            "vercel_url": "${{ needs.sysCP-deploy-preprod.outputs.url }}",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+            "deployed_by": "${{ github.actor }}"
+          }
+          EOF
+          cd /tmp/backup-repo && git add . && git commit -m "backup: ${{ env.TRIBE_NAME }}/central-perk frontend pre-prod v${{ needs.sysCP-deploy-preprod.outputs.version }}" && git push
+
+  sysCP-governance:
+    name: "[CENTRAL-PERK | PROD] Governance"
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    needs: sysCP-backup-preprod
+    environment: governance
+    steps:
+      - run: echo "✅ Central-Perk governance approved"
+
+  sysCP-deploy-prod:
+    name: "[CENTRAL-PERK | PROD] Deploy to Production (Vercel)"
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    needs: sysCP-governance
+    environment:
+      name: production-CentralPerk
+      url: https://${{ vars.PROD_DOMAIN_SYSCP }}
+    outputs:
+      version: ${{ steps.version.outputs.VERSION }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        working-directory: systems/central-perk
+        run: echo "VERSION=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+      - uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID_SYSCP_PROD }}
+          vercel-args: '--prod'
+      - uses: ncipollo/release-action@v1
+        with:
+          tag: "${{ env.TRIBE_NAME }}-central-perk-frontend-v${{ steps.version.outputs.VERSION }}"
+          name: "[central-perk frontend] Release v${{ steps.version.outputs.VERSION }}"
+          makeLatest: false
+          allowUpdates: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  sysCP-notify-prod:
+    name: "[CENTRAL-PERK | PROD] Notify"
+    if: always() && github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [sysCP-deploy-prod]
+    uses: ./.github/workflows/notify.yml
+    with:
+      status: ${{ needs.sysCP-deploy-prod.result }}
+      pipeline: "central-perk Frontend – Production"
+      version: ${{ needs.sysCP-deploy-prod.outputs.version }}
+      environment: production
+      tribe: ${{ vars.TRIBE_NAME }}
+      system: central-perk
+    secrets: inherit
